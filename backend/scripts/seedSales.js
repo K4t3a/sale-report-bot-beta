@@ -74,7 +74,6 @@ async function upsertAdmin() {
 }
 
 async function ensureReports() {
-  // sql_template в учебном проекте можно хранить для будущего расширения.
   const reports = [
     {
       name: "Ежедневный отчёт по продажам",
