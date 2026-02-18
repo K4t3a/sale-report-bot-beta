@@ -1,7 +1,7 @@
 import { query } from "../../lib/db";
 
 // Ключи периодов для формирования отчёта.
-// Добавили last30days, чтобы корректно поддерживать отчёты с типом MONTH.
+// last30days, чтобы корректно поддерживать отчёты с типом MONTH.
 export type ReportPeriodKey = "today" | "yesterday" | "last7days" | "last30days";
 
 export interface SalesReportSummary {
