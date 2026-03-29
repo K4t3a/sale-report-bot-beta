@@ -3,6 +3,12 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import Button from "../components/ui/Button";
 import Badge from "../components/ui/Badge";
 
+type AuthUser = {
+  id?: number;
+  username?: string;
+  role?: "ADMIN" | "ANALYST" | "VIEWER";
+};
+
 const Icon = ({
   children,
 }: {
@@ -28,6 +34,43 @@ const IconChart = () => (
     <path d="M8 16V10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     <path d="M12 16V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     <path d="M16 16V12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+
+const IconUsers = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <path
+      d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+    <circle cx="9.5" cy="7" r="4" stroke="currentColor" strokeWidth="2" />
+    <path
+      d="M20 21v-2a4 4 0 0 0-3-3.87"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+    <path
+      d="M16 3.13a4 4 0 0 1 0 7.75"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
+const IconPlug = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <path d="M9 7V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <path d="M15 7V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <path
+      d="M8 10h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4v-2Z"
+      stroke="currentColor"
+      strokeWidth="2"
+    />
+    <path d="M12 16v5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
   </svg>
 );
 
@@ -88,13 +131,24 @@ const linkBase: React.CSSProperties = {
 const AdminShell: React.FC = () => {
   const navigate = useNavigate();
 
-  const username = localStorage.getItem("username") ?? "admin";
-  const role = "ADMIN";
+  const authUserRaw = localStorage.getItem("authUser");
+
+  let authUser: AuthUser | null = null;
+
+  try {
+    authUser = authUserRaw ? (JSON.parse(authUserRaw) as AuthUser) : null;
+  } catch {
+    authUser = null;
+  }
+
+  const username = authUser?.username ?? "user";
+  const role = authUser?.role ?? "UNKNOWN";
+  const isAdmin = role === "ADMIN";
 
   const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("username");
-    navigate("/login");
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("authUser");
+    navigate("/login", { replace: true });
   };
 
   return (
@@ -105,7 +159,6 @@ const AdminShell: React.FC = () => {
         minHeight: "100vh",
       }}
     >
-      {/* SIDEBAR */}
       <aside
         style={{
           padding: 18,
@@ -115,8 +168,12 @@ const AdminShell: React.FC = () => {
         }}
       >
         <div style={{ display: "grid", gap: 4, marginBottom: 14 }}>
-          <div style={{ fontWeight: 900, fontSize: 16, letterSpacing: "-0.01em" }}>Sales Report</div>
-          <div className="muted" style={{ fontSize: 12 }}>Админ-панель · beta</div>
+          <div style={{ fontWeight: 900, fontSize: 16, letterSpacing: "-0.01em" }}>
+            Sales Report
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Админ-панель · beta
+          </div>
         </div>
 
         <nav style={{ display: "grid", gap: 8, marginTop: 10 }}>
@@ -131,6 +188,32 @@ const AdminShell: React.FC = () => {
           >
             <Icon><IconChart /></Icon>
             Отчёты
+          </NavLink>
+
+          {isAdmin ? (
+            <NavLink
+              to="/admin/users"
+              style={({ isActive }) => ({
+                ...linkBase,
+                background: isActive ? "rgba(37, 99, 235, 0.10)" : "transparent",
+                border: isActive ? "1px solid rgba(37, 99, 235, 0.16)" : "1px solid transparent",
+              })}
+            >
+              <Icon><IconUsers /></Icon>
+              Пользователи
+            </NavLink>
+          ) : null}
+
+          <NavLink
+            to="/admin/integrations"
+            style={({ isActive }) => ({
+              ...linkBase,
+              background: isActive ? "rgba(37, 99, 235, 0.10)" : "transparent",
+              border: isActive ? "1px solid rgba(37, 99, 235, 0.16)" : "1px solid transparent",
+            })}
+          >
+            <Icon><IconPlug /></Icon>
+            Интеграции
           </NavLink>
 
           <NavLink
@@ -158,16 +241,16 @@ const AdminShell: React.FC = () => {
           </NavLink>
         </nav>
 
-        {/* SESSION */}
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(15, 23, 42, 0.08)" }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Сессия</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Сессия
+          </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <div style={{ fontWeight: 800 }}>{username}</div>
             <Badge tone="neutral">{role}</Badge>
           </div>
 
-          {/* BOT LINK moved here (минимализм) */}
           <a
             href="https://t.me/sales_r3port_bot"
             target="_blank"
@@ -196,7 +279,6 @@ const AdminShell: React.FC = () => {
         </div>
       </aside>
 
-      {/* CONTENT */}
       <main style={{ padding: "22px 24px" }}>
         <Outlet />
       </main>

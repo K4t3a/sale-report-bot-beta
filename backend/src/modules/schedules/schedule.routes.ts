@@ -1,5 +1,10 @@
 import { Router } from "express";
 import { query } from "../../lib/db";
+import {
+  requireAuth,
+  requireRoles,
+  requireServiceAuth,
+} from "../../middleware/auth";
 import { findAndPrepareDueSchedules } from "./schedule.service";
 
 /** Частота запуска расписания */
@@ -7,19 +12,69 @@ export type ScheduleFrequency = "DAILY" | "WEEKLY";
 
 const router = Router();
 
-router.post("/run-due", async (_req, res) => {
+// Этот маршрут вызывает бот как внутренний сервис.
+// Не делаем его публичным и не заставляем бота использовать JWT.
+router.post("/run-due", requireServiceAuth, async (_req, res) => {
   try {
     const data = await findAndPrepareDueSchedules();
-    res.json(data);
+    return res.json(data);
   } catch (error) {
     console.error("run-due error", error);
-    res.status(500).json({ message: "Ошибка обработки расписаний" });
+
+    return res.status(500).json({
+      message: "Ошибка обработки расписаний",
+    });
   }
 });
 
+// Этот маршрут бот вызывает после фактической отправки,
+// чтобы зафиксировать SUCCESS или ERROR в delivery_logs.
+router.post("/delivery-result", requireServiceAuth, async (req, res) => {
+  try {
+    const {
+      reportId,
+      userId,
+      scheduleId,
+      status,
+      error,
+    } = (req.body ?? {}) as {
+      reportId?: number;
+      userId?: number;
+      scheduleId?: number;
+      status?: "SUCCESS" | "ERROR";
+      error?: string | null;
+    };
+
+    if (!reportId || !userId || !scheduleId || !status) {
+      return res.status(400).json({
+        message: "reportId, userId, scheduleId и status обязательны",
+      });
+    }
+
+    await query(
+      `
+      INSERT INTO delivery_logs (report_id, user_id, schedule_id, status, error)
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [reportId, userId, scheduleId, status, error ?? null]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("delivery-result error", err);
+
+    return res.status(500).json({
+      message: "Ошибка записи результата доставки",
+    });
+  }
+});
+
+// Все остальные маршруты schedules доступны только панели.
+// Доступ: ADMIN и ANALYST.
+router.use(requireAuth, requireRoles("ADMIN", "ANALYST"));
+
 router.get("/", async (_req, res) => {
   try {
-    // Получаем расписания с присоединением отчёта и пользователей-получателей
     const rowsRes = await query<{
       scheduleId: number;
       hour: number;
@@ -54,8 +109,8 @@ router.get("/", async (_req, res) => {
       `
     );
 
-    // Группируем строки в DTO
     const map = new Map<number, any>();
+
     for (const row of rowsRes.rows) {
       if (!map.has(row.scheduleId)) {
         map.set(row.scheduleId, {
@@ -69,7 +124,9 @@ router.get("/", async (_req, res) => {
           recipients: [] as any[],
         });
       }
+
       const item = map.get(row.scheduleId);
+
       if (row.userId) {
         item.recipients.push({
           id: row.userId,
@@ -79,12 +136,13 @@ router.get("/", async (_req, res) => {
       }
     }
 
-    const dto = Array.from(map.values());
-
-    res.json(dto);
+    return res.json(Array.from(map.values()));
   } catch (e) {
     console.error("get schedules error", e);
-    res.status(500).json({ message: "Ошибка загрузки расписаний" });
+
+    return res.status(500).json({
+      message: "Ошибка загрузки расписаний",
+    });
   }
 });
 
@@ -101,7 +159,7 @@ router.post("/", async (req, res) => {
       reportId?: number;
       hour?: number;
       minute?: number;
-      frequency?: ScheduleFrequency;        
+      frequency?: ScheduleFrequency;
       weekday?: number;
       recipientIds?: number[];
     };
@@ -112,14 +170,15 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Для WEEKLY требуется weekday (0..6)
     let safeWeekday: number | null = null;
+
     if (frequency === "WEEKLY") {
       if (typeof weekday !== "number" || weekday < 0 || weekday > 6) {
         return res.status(400).json({
           message: "Для WEEKLY укажите weekday (0..6), где 0 = воскресенье",
         });
       }
+
       safeWeekday = weekday;
     }
 
@@ -138,6 +197,7 @@ router.post("/", async (req, res) => {
       `,
       [reportId, hour, minute, frequency, safeWeekday]
     );
+
     const schedule = scheduleRes.rows[0];
 
     const ids =
@@ -146,8 +206,8 @@ router.post("/", async (req, res) => {
         : [];
 
     if (ids.length > 0) {
-      // Убираем дубли по (schedule_id, user_id)
       const values = ids.map((_, i) => `($1, $${i + 2})`).join(",");
+
       await query(
         `
         INSERT INTO schedule_recipients (schedule_id, user_id)
@@ -158,7 +218,6 @@ router.post("/", async (req, res) => {
       );
     }
 
-    // Возвращаем созданный объект (с отчётом и получателями)
     const createdRows = await query<{
       scheduleId: number;
       hour: number;
@@ -196,6 +255,7 @@ router.post("/", async (req, res) => {
     );
 
     const base = createdRows.rows[0];
+
     const payload = {
       id: base.scheduleId,
       hour: base.hour,
@@ -213,10 +273,13 @@ router.post("/", async (req, res) => {
         })),
     };
 
-    res.status(201).json(payload);
+    return res.status(201).json(payload);
   } catch (err) {
     console.error("create schedule error", err);
-    res.status(500).json({ message: "Ошибка создания расписания" });
+
+    return res.status(500).json({
+      message: "Ошибка создания расписания",
+    });
   }
 });
 
@@ -224,17 +287,22 @@ router.delete("/:id", async (req, res) => {
   const id = Number(req.params.id);
 
   if (!Number.isFinite(id)) {
-    return res.status(400).json({ message: "Некорректный id расписания" });
+    return res.status(400).json({
+      message: "Некорректный id расписания",
+    });
   }
 
   try {
     await query(`DELETE FROM schedule_recipients WHERE schedule_id = $1`, [id]);
     await query(`DELETE FROM schedules WHERE id = $1`, [id]);
 
-    res.status(204).send();
+    return res.status(204).send();
   } catch (err: any) {
     console.error("delete schedule error", err);
-    res.status(500).json({ message: "Ошибка удаления расписания" });
+
+    return res.status(500).json({
+      message: "Ошибка удаления расписания",
+    });
   }
 });
 

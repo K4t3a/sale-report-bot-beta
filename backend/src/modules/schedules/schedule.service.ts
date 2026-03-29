@@ -16,6 +16,7 @@ export interface DueRecipientDto {
 
 export interface DueScheduleDto {
   scheduleId: number;
+  reportId: number;
   reportName: string;
   summary: SalesReportSummary;
   /**
@@ -44,8 +45,8 @@ function mapPeriodTypeToKey(periodType: string): ReportPeriodKey {
  *  - собирает получателей (только активные пользователи с telegram_id);
  *  - формирует отчёт (summary + CSV) и возвращает список задач на отправку.
  *
- * Важная оговорка: здесь же фиксируется лог доставки SUCCESS, чтобы
- * защититься от дублей в пределах одной минуты (см. minuteStart).
+ * Важно: логи доставки здесь не пишутся.
+ * SUCCESS/ERROR фиксируются только после реальной отправки ботом.
  */
 export async function findAndPrepareDueSchedules(): Promise<DueScheduleDto[]> {
   // Текущее время используется как «критерий готовности» расписаний.
@@ -174,34 +175,13 @@ export async function findAndPrepareDueSchedules(): Promise<DueScheduleDto[]> {
 
     results.push({
       scheduleId: s.scheduleId,
+      reportId: s.reportId,
       reportName: s.reportName,
       summary: reportResult.summary,
       csv: fullCsv,
       recipients,
     });
 
-    // Логи доставки пишем пакетно (по одной строке на получателя).
-    if (recipients.length) {
-      const values = recipients
-        .map((_, i) => {
-          const base = i * 3;
-          return `($${base + 1}, $${base + 2}, $${base + 3}, 'SUCCESS')`;
-        })
-        .join(",");
-
-      const params: any[] = [];
-      for (const r of recipients) {
-        params.push(s.reportId, r.userId, s.scheduleId);
-      }
-
-      await query(
-        `
-        INSERT INTO delivery_logs (report_id, user_id, schedule_id, status)
-        VALUES ${values}
-        `,
-        params
-      );
-    }
   }
 
   return results;

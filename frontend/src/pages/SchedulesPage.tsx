@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import PageHeader from "../components/ui/PageHeader";
 import Badge from "../components/ui/Badge";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+import { api } from "../lib/api";
 
 type Report = {
   id: number;
@@ -36,9 +36,30 @@ type Schedule = {
   }[];
 };
 
-const weekdayLabel = (w: number) => {
+type CreateScheduleBody =
+  | {
+      reportId: number;
+      hour: number;
+      minute: number;
+      frequency: "DAILY";
+      recipientIds: number[];
+    }
+  | {
+      reportId: number;
+      hour: number;
+      minute: number;
+      frequency: "WEEKLY";
+      weekday: number;
+      recipientIds: number[];
+    };
+
+type ApiErrorResponse = {
+  message?: string;
+};
+
+const weekdayLabel = (weekday: number): string => {
   const arr = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
-  return arr[w] ?? String(w);
+  return arr[weekday] ?? String(weekday);
 };
 
 const SchedulesPage: React.FC = () => {
@@ -55,160 +76,168 @@ const SchedulesPage: React.FC = () => {
   const [hour, setHour] = useState<string>("9");
   const [minute, setMinute] = useState<string>("0");
   const [frequency, setFrequency] = useState<ScheduleFrequency>("DAILY");
-  const [weekday, setWeekday] = useState<string>("1"); // понедельник
+  const [weekday, setWeekday] = useState<string>("1");
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
 
-  const canCreate = useMemo(() => {
-    if (!reportId) return false;
-    if (!selectedUserIds.length) return false;
-    const h = Number(hour);
-    const m = Number(minute);
-    if (!Number.isFinite(h) || h < 0 || h > 23) return false;
-    if (!Number.isFinite(m) || m < 0 || m > 59) return false;
-    if (frequency === "WEEKLY") {
-      const wd = Number(weekday);
-      if (!Number.isFinite(wd) || wd < 0 || wd > 6) return false;
+  function getErrorMessage(err: unknown, fallback: string): string {
+    if (axios.isAxiosError<ApiErrorResponse>(err)) {
+      return err.response?.data?.message ?? err.message ?? fallback;
     }
+
+    if (err instanceof Error) {
+      return err.message;
+    }
+
+    return fallback;
+  }
+
+  const canCreate = useMemo(() => {
+    if (!reportId) {
+      return false;
+    }
+
+    if (!selectedUserIds.length) {
+      return false;
+    }
+
+    const parsedHour = Number(hour);
+    const parsedMinute = Number(minute);
+
+    if (!Number.isFinite(parsedHour) || parsedHour < 0 || parsedHour > 23) {
+      return false;
+    }
+
+    if (!Number.isFinite(parsedMinute) || parsedMinute < 0 || parsedMinute > 59) {
+      return false;
+    }
+
+    if (frequency === "WEEKLY") {
+      const parsedWeekday = Number(weekday);
+
+      if (!Number.isFinite(parsedWeekday) || parsedWeekday < 0 || parsedWeekday > 6) {
+        return false;
+      }
+    }
+
     return true;
   }, [reportId, selectedUserIds, hour, minute, frequency, weekday]);
 
   useEffect(() => {
-    const load = async () => {
+    let cancelled = false;
+
+    async function load(): Promise<void> {
       setLoading(true);
       setError(null);
+
       try {
         const [reportsRes, usersRes, schedulesRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/reports`),
-          fetch(`${API_BASE_URL}/api/users/telegram`),
-          fetch(`${API_BASE_URL}/api/schedules`),
+          api.get<Report[]>("/api/reports"),
+          api.get<TelegramUser[]>("/api/users/telegram"),
+          api.get<Schedule[]>("/api/schedules"),
         ]);
 
-        if (!reportsRes.ok || !usersRes.ok || !schedulesRes.ok) {
-          throw new Error("Ошибка загрузки данных");
+        if (cancelled) {
+          return;
         }
 
-        const [reportsData, usersData, schedulesData] = await Promise.all([
-          reportsRes.json(),
-          usersRes.json(),
-          schedulesRes.json(),
-        ]);
+        setReports(reportsRes.data);
+        setUsers(usersRes.data);
+        setSchedules(schedulesRes.data);
 
-        setReports(reportsData);
-        setUsers(usersData);
-        setSchedules(schedulesData);
-
-        if (reportsData.length > 0) {
-          setReportId(String(reportsData[0].id));
+        if (reportsRes.data.length > 0) {
+          setReportId((prev) => prev || String(reportsRes.data[0].id));
         }
-      } catch (e) {
-        console.error("load schedules page error", e);
-        setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+      } catch (err: unknown) {
+        console.error("load schedules page error", err);
+
+        if (!cancelled) {
+          setError(getErrorMessage(err, "Ошибка загрузки данных"));
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-    };
+    }
 
     void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const toggleUser = (userId: number) => {
+  function toggleUser(userId: number): void {
     setSelectedUserIds((prev) =>
       prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
     );
-  };
+  }
 
-  const handleCreateSchedule = async (e: React.FormEvent) => {
+  async function handleCreateSchedule(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     setFormLoading(true);
     setError(null);
 
     try {
-      if (!canCreate) throw new Error("Проверьте поля формы (время, отчёт, получатели)");
-
- type CreateScheduleBody =
-  | {
-      reportId: number;
-      hour: number;
-      minute: number;
-      frequency: "DAILY";
-      recipientIds: number[];
-    }
-  | {
-      reportId: number;
-      hour: number;
-      minute: number;
-      frequency: "WEEKLY";
-      weekday: number; // 0..6
-      recipientIds: number[];
-    };
-
-const base = {
-  reportId: Number(reportId),
-  hour: Number(hour),
-  minute: Number(minute),
-  recipientIds: selectedUserIds,
-};
-
-const body: CreateScheduleBody =
-  frequency === "WEEKLY"
-    ? {
-        ...base,
-        frequency: "WEEKLY",
-        weekday: Number(weekday),
+      if (!canCreate) {
+        throw new Error("Проверьте поля формы (время, отчёт, получатели)");
       }
-    : {
-        ...base,
-        frequency: "DAILY",
+
+      const base = {
+        reportId: Number(reportId),
+        hour: Number(hour),
+        minute: Number(minute),
+        recipientIds: selectedUserIds,
       };
 
-      const res = await fetch(`${API_BASE_URL}/api/schedules`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const body: CreateScheduleBody =
+        frequency === "WEEKLY"
+          ? {
+              ...base,
+              frequency: "WEEKLY",
+              weekday: Number(weekday),
+            }
+          : {
+              ...base,
+              frequency: "DAILY",
+            };
 
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(data?.message ?? `Ошибка создания расписания: ${res.status}`);
-      }
+      const res = await api.post<Schedule>("/api/schedules", body);
 
-      setSchedules((prev) => [...prev, data as Schedule]);
+      setSchedules((prev) => [...prev, res.data]);
 
-      // reset частично (получателей сбрасываем, чтобы случайно не клепать одинаковые задачи)
       setHour("9");
       setMinute("0");
       setFrequency("DAILY");
       setWeekday("1");
       setSelectedUserIds([]);
-    } catch (e) {
-      console.error("create schedule error", e);
-      setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+    } catch (err: unknown) {
+      console.error("create schedule error", err);
+      setError(getErrorMessage(err, "Ошибка создания расписания"));
     } finally {
       setFormLoading(false);
     }
-  };
+  }
 
-  const handleDeleteSchedule = async (id: number) => {
-    if (!window.confirm("Удалить расписание?")) return;
+  async function handleDeleteSchedule(id: number): Promise<void> {
+    const confirmed = window.confirm("Удалить расписание?");
+    if (!confirmed) {
+      return;
+    }
 
     setDeletingId(id);
     setError(null);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/schedules/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Ошибка удаления: ${res.status} ${text || ""}`);
-      }
-
-      setSchedules((prev) => prev.filter((s) => s.id !== id));
-    } catch (e) {
-      console.error("delete schedule error", e);
-      setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+      await api.delete(`/api/schedules/${id}`);
+      setSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
+    } catch (err: unknown) {
+      console.error("delete schedule error", err);
+      setError(getErrorMessage(err, "Ошибка удаления расписания"));
     } finally {
       setDeletingId(null);
     }
-  };
+  }
 
   return (
     <div>
@@ -223,23 +252,46 @@ const body: CreateScheduleBody =
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
+          gap: 16,
+        }}
+      >
         <Card>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+            }}
+          >
             <div style={{ fontWeight: 900, fontSize: 14 }}>Создать расписание</div>
             <span className="muted" style={{ fontSize: 12 }}>
-              {loading ? "Загрузка справочников…" : `${reports.length} отчётов · ${users.length} пользователей`}
+              {loading
+                ? "Загрузка справочников…"
+                : `${reports.length} отчётов · ${users.length} пользователей`}
             </span>
           </div>
 
-          <form onSubmit={handleCreateSchedule} style={{ display: "grid", gap: 12, marginTop: 14 }}>
+          <form
+            onSubmit={(e) => {
+              void handleCreateSchedule(e);
+            }}
+            style={{ display: "grid", gap: 12, marginTop: 14 }}
+          >
             <label className="label">
               Отчёт
-              <select className="select" value={reportId} onChange={(e) => setReportId(e.target.value)}>
+              <select
+                className="select"
+                value={reportId}
+                onChange={(e) => setReportId(e.target.value)}
+              >
                 <option value="">— выберите отчёт —</option>
-                {reports.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
+                {reports.map((report) => (
+                  <option key={report.id} value={report.id}>
+                    {report.name}
                   </option>
                 ))}
               </select>
@@ -323,11 +375,12 @@ const body: CreateScheduleBody =
                     Нет пользователей с привязанным Telegram.
                   </div>
                 ) : (
-                  users.map((u) => {
-                    const checked = selectedUserIds.includes(u.id);
+                  users.map((user) => {
+                    const checked = selectedUserIds.includes(user.id);
+
                     return (
                       <label
-                        key={u.id}
+                        key={user.id}
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -339,15 +392,26 @@ const body: CreateScheduleBody =
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <input type="checkbox" checked={checked} onChange={() => toggleUser(u.id)} />
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleUser(user.id)}
+                          />
                           <div style={{ display: "grid" }}>
-                            <div style={{ fontWeight: 800, fontSize: 13 }}>{u.username}</div>
+                            <div style={{ fontWeight: 800, fontSize: 13 }}>{user.username}</div>
                             <div className="muted" style={{ fontSize: 12 }}>
-                              {u.telegramId ? `telegram_id: ${u.telegramId}` : "telegram_id не привязан"}
+                              {user.telegramId
+                                ? `telegram_id: ${user.telegramId}`
+                                : "telegram_id не привязан"}
                             </div>
                           </div>
                         </div>
-                        {checked ? <Badge tone="success">выбран</Badge> : <Badge tone="neutral">—</Badge>}
+
+                        {checked ? (
+                          <Badge tone="success">выбран</Badge>
+                        ) : (
+                          <Badge tone="neutral">—</Badge>
+                        )}
                       </label>
                     );
                   })
@@ -359,6 +423,7 @@ const body: CreateScheduleBody =
               <Button type="submit" disabled={formLoading || loading || !canCreate}>
                 {formLoading ? "Создание…" : "Создать"}
               </Button>
+
               <Button
                 type="button"
                 variant="ghost"
@@ -372,12 +437,16 @@ const body: CreateScheduleBody =
         </Card>
 
         <Card>
-          <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 8 }}>Подсказка для демонстрации</div>
-          <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
-            Бот периодически вызывает backend эндпоинт <b>/api/schedules/run-due</b> и забирает «готовые к отправке»
-            расписания. Дедупликация делается через таблицу <b>delivery_logs</b> (чтобы не слать один и тот же отчёт
-            дважды в одну минуту).
+          <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 8 }}>
+            Подсказка для демонстрации
           </div>
+
+          <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+            Бот периодически вызывает backend эндпоинт <b>/api/schedules/run-due</b> и забирает
+            «готовые к отправке» расписания. Дедупликация делается через таблицу{" "}
+            <b>delivery_logs</b>, чтобы не отправлять один и тот же отчёт дважды в одну минуту.
+          </div>
+
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             <div className="badge" style={{ justifyContent: "center" }}>
               DAILY — каждый день в указанное время
@@ -391,7 +460,14 @@ const body: CreateScheduleBody =
 
       <div style={{ marginTop: 16 }}>
         <Card padded={false}>
-          <div style={{ padding: 16, display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+          <div
+            style={{
+              padding: 16,
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+            }}
+          >
             <div style={{ fontWeight: 900, fontSize: 14 }}>Существующие расписания</div>
             <span className="muted" style={{ fontSize: 12 }}>
               {schedules.length ? `${schedules.length} шт.` : "—"}
@@ -419,30 +495,38 @@ const body: CreateScheduleBody =
                 </tr>
               </thead>
               <tbody>
-                {schedules.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.id}</td>
-                    <td>{s.report?.name ?? s.reportName ?? "—"}</td>
+                {schedules.map((schedule) => (
+                  <tr key={schedule.id}>
+                    <td>{schedule.id}</td>
+                    <td>{schedule.report?.name ?? schedule.reportName ?? "—"}</td>
                     <td>
-                      {String(s.hour).padStart(2, "0")}:{String(s.minute).padStart(2, "0")}
+                      {String(schedule.hour).padStart(2, "0")}:
+                      {String(schedule.minute).padStart(2, "0")}
                     </td>
                     <td>
-                      {s.frequency === "DAILY" ? (
+                      {schedule.frequency === "DAILY" ? (
                         <Badge tone="neutral">DAILY</Badge>
                       ) : (
-                        <Badge tone="warning">WEEKLY · {s.weekday != null ? weekdayLabel(s.weekday) : "?"}</Badge>
+                        <Badge tone="warning">
+                          WEEKLY ·{" "}
+                          {schedule.weekday != null ? weekdayLabel(schedule.weekday) : "?"}
+                        </Badge>
                       )}
                     </td>
                     <td style={{ maxWidth: 360 }}>
-                      {s.recipients.length ? s.recipients.map((r) => r.username).join(", ") : "—"}
+                      {schedule.recipients.length
+                        ? schedule.recipients.map((recipient) => recipient.username).join(", ")
+                        : "—"}
                     </td>
                     <td style={{ textAlign: "right" }}>
                       <Button
                         variant="danger"
-                        onClick={() => handleDeleteSchedule(s.id)}
-                        disabled={deletingId === s.id}
+                        onClick={() => {
+                          void handleDeleteSchedule(schedule.id);
+                        }}
+                        disabled={deletingId === schedule.id}
                       >
-                        {deletingId === s.id ? "Удаление…" : "Удалить"}
+                        {deletingId === schedule.id ? "Удаление…" : "Удалить"}
                       </Button>
                     </td>
                   </tr>

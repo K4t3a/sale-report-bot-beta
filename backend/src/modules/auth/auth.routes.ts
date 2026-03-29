@@ -1,13 +1,24 @@
-
 import { Router } from "express";
 import { query } from "../../lib/db";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import { requireAuth } from "../../middleware/auth";
 
 const router = Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
+type UserRole = "ADMIN" | "ANALYST" | "VIEWER";
+
+// Текущий пользователь панели.
+router.get("/me", requireAuth, async (req, res) => {
+  return res.json({
+    user: req.user,
+  });
+});
+
+// В панель пускаем только ADMIN и ANALYST.
+// VIEWER работает через Telegram.
 router.post("/login", async (req, res) => {
   try {
     const { username, password } = req.body as {
@@ -16,15 +27,15 @@ router.post("/login", async (req, res) => {
     };
 
     if (!username || !password) {
-      return res
-        .status(400)
-        .json({ message: "Укажите логин и пароль" });
+      return res.status(400).json({
+        message: "Укажите логин и пароль",
+      });
     }
 
     const userRes = await query<{
       id: number;
       username: string;
-      role: "ADMIN" | "VIEWER";
+      role: UserRole;
       isActive: boolean;
       passwordHash: string | null;
     }>(
@@ -39,26 +50,26 @@ router.post("/login", async (req, res) => {
       WHERE username = $1
       LIMIT 1
       `,
-      [username]
+      [username.trim()]
     );
 
     const user = userRes.rows[0];
+    const canUseWebPanel = user?.role === "ADMIN" || user?.role === "ANALYST";
 
-    if (!user || !user.isActive || user.role !== "ADMIN") {
-      return res
-        .status(401)
-        .json({ message: "Неверный логин или пароль" });
+    if (!user || !user.isActive || !canUseWebPanel) {
+      return res.status(401).json({
+        message: "Неверный логин или пароль",
+      });
     }
 
-    // В бете используем bcrypt-хеши (создаются seed-скриптом)
     const isValid =
       typeof user.passwordHash === "string" &&
       (await bcrypt.compare(password, user.passwordHash));
 
     if (!isValid) {
-      return res
-        .status(401)
-        .json({ message: "Неверный логин или пароль" });
+      return res.status(401).json({
+        message: "Неверный логин или пароль",
+      });
     }
 
     const payload = {
@@ -71,13 +82,16 @@ router.post("/login", async (req, res) => {
       expiresIn: "8h",
     });
 
-    res.json({
+    return res.json({
       token,
       user: payload,
     });
   } catch (err) {
     console.error("POST /api/auth/login error", err);
-    res.status(500).json({ message: "Ошибка авторизации" });
+
+    return res.status(500).json({
+      message: "Ошибка авторизации",
+    });
   }
 });
 

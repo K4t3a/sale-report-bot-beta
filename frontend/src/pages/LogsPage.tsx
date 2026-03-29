@@ -1,23 +1,14 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+import Card from "../components/ui/Card";
+import PageHeader from "../components/ui/PageHeader";
+import Badge from "../components/ui/Badge";
+import { api } from "../lib/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
-
-type Report = {
-  id: number;
-  name: string;
-  description?: string | null;
-};
-
-type TelegramUser = {
-  id: number;
-  username: string;
-  telegramId: string | null;
-};
-
-type DeliveryLogRow = {
+type LogItem = {
   id: number;
   sentAt: string;
-  status: "SUCCESS" | "ERROR" | string;
+  status: string;
   error: string | null;
   reportId: number | null;
   reportName: string | null;
@@ -26,245 +17,153 @@ type DeliveryLogRow = {
   scheduleId: number | null;
 };
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("ru-RU");
-}
-
-function statusColor(status: string): string {
-  if (status === "SUCCESS") return "#16a34a";
-  if (status === "ERROR") return "#dc2626";
-  return "#4b5563";
-}
+type ApiErrorResponse = {
+  message?: string;
+};
 
 const LogsPage: React.FC = () => {
-  const [reports, setReports] = useState<Report[]>([]);
-  const [users, setUsers] = useState<TelegramUser[]>([]);
-  const [logs, setLogs] = useState<DeliveryLogRow[]>([]);
-
+  const [items, setItems] = useState<LogItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [filterReportId, setFilterReportId] = useState<string>("");
-  const [filterUserId, setFilterUserId] = useState<string>("");
+  function getErrorMessage(err: unknown, fallback: string): string {
+    if (axios.isAxiosError<ApiErrorResponse>(err)) {
+      return err.response?.data?.message ?? err.message ?? fallback;
+    }
+
+    if (err instanceof Error) {
+      return err.message;
+    }
+
+    return fallback;
+  }
 
   useEffect(() => {
-    const load = async () => {
+    let cancelled = false;
+
+    async function load(): Promise<void> {
       setLoading(true);
       setError(null);
 
       try {
-        const qs = new URLSearchParams();
-        qs.set("limit", "200"); // чтобы было что фильтровать локально
+        const res = await api.get<LogItem[]>("/api/logs", {
+          params: { limit: 200 },
+        });
 
-        const [reportsRes, usersRes, logsRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/reports`),
-          fetch(`${API_BASE_URL}/api/users/telegram`),
-          fetch(`${API_BASE_URL}/api/logs?${qs.toString()}`),
-        ]);
+        if (!cancelled) {
+          setItems(res.data);
+        }
+      } catch (err: unknown) {
+        console.error("logs load error", err);
 
-        if (!reportsRes.ok) throw new Error(`Не удалось загрузить отчёты (${reportsRes.status})`);
-        if (!usersRes.ok) throw new Error(`Не удалось загрузить пользователей (${usersRes.status})`);
-        if (!logsRes.ok) throw new Error(`Не удалось загрузить логи (${logsRes.status})`);
-
-        const [reportsData, usersData, logsData] = (await Promise.all([
-          reportsRes.json(),
-          usersRes.json(),
-          logsRes.json(),
-        ])) as [Report[], TelegramUser[], DeliveryLogRow[]];
-
-        setReports(reportsData);
-        setUsers(usersData);
-        setLogs(logsData);
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Неизвестная ошибка");
+        if (!cancelled) {
+          setError(getErrorMessage(err, "Ошибка загрузки логов"));
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-    };
+    }
 
     void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const filteredLogs = useMemo(() => {
-    const rid = filterReportId ? Number(filterReportId) : null;
-    const uid = filterUserId ? Number(filterUserId) : null;
+  const formatDateTime = (value: string): string => {
+    const parsed = new Date(value);
 
-    return logs.filter((l) => {
-      if (rid && l.reportId !== rid) return false;
-      if (uid && l.userId !== uid) return false;
-      return true;
-    });
-  }, [logs, filterReportId, filterUserId]);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleString("ru-RU");
+  };
+
+  const renderStatus = (status: string): React.ReactNode => {
+    const normalized = status.toUpperCase();
+
+    if (normalized === "SUCCESS" || normalized === "SENT" || normalized === "OK") {
+      return <Badge tone="success">{status}</Badge>;
+    }
+
+    if (normalized === "ERROR" || normalized === "FAILED") {
+      return <Badge tone="danger">{status}</Badge>;
+    }
+
+    return <Badge tone="neutral">{status}</Badge>;
+  };
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, color: "rgba(15, 23, 42, 0.55)" }}>Панель управления</div>
-        <h1 style={{ fontSize: 22, margin: "6px 0 0" }}>Логи отправки</h1>
-      </div>
+    <div>
+      <PageHeader
+        title="Логи"
+        description="История отправки отчётов, статусы доставки и возможные ошибки при выполнении рассылки."
+      />
 
-      {error && (
-        <div
-          style={{
-            background: "rgba(239, 68, 68, 0.08)",
-            color: "#991b1b",
-            padding: "10px 12px",
-            marginBottom: 14,
-            borderRadius: 10,
-            border: "1px solid rgba(239, 68, 68, 0.18)",
-          }}
-        >
+      {error ? (
+        <div className="badge badge-danger" style={{ display: "inline-flex", marginBottom: 12 }}>
           {error}
         </div>
-      )}
+      ) : null}
 
-      {/* Filters */}
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          marginBottom: 14,
-          alignItems: "flex-end",
-          flexWrap: "wrap",
-        }}
-      >
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "rgba(15, 23, 42, 0.55)" }}>Отчёт</span>
-          <select
-            value={filterReportId}
-            onChange={(e) => setFilterReportId(e.target.value)}
-            style={{
-              height: 38,
-              padding: "0 10px",
-              borderRadius: 10,
-              border: "1px solid rgba(15, 23, 42, 0.10)",
-              background: "#fff",
-              minWidth: 220,
-            }}
-          >
-            <option value="">Все</option>
-            {reports.map((r) => (
-              <option key={r.id} value={String(r.id)}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "rgba(15, 23, 42, 0.55)" }}>Пользователь</span>
-          <select
-            value={filterUserId}
-            onChange={(e) => setFilterUserId(e.target.value)}
-            style={{
-              height: 38,
-              padding: "0 10px",
-              borderRadius: 10,
-              border: "1px solid rgba(15, 23, 42, 0.10)",
-              background: "#fff",
-              minWidth: 260,
-            }}
-          >
-            <option value="">Все</option>
-            {users.map((u) => (
-              <option key={u.id} value={String(u.id)}>
-                {u.username}
-                {u.telegramId ? ` (${u.telegramId})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      {loading ? (
-        <div style={{ color: "rgba(15, 23, 42, 0.65)" }}>Загрузка…</div>
-      ) : filteredLogs.length === 0 ? (
-        <div style={{ color: "rgba(15, 23, 42, 0.65)" }}>Логов нет.</div>
-      ) : (
+      <Card padded={false}>
         <div
           style={{
-            background: "#fff",
-            border: "1px solid rgba(15, 23, 42, 0.08)",
-            borderRadius: 14,
-            overflow: "hidden",
+            padding: 16,
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <div style={{ fontWeight: 900, fontSize: 14 }}>Журнал доставки</div>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {loading ? "Загрузка…" : items.length ? `${items.length} записей` : "—"}
+          </span>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 16 }} className="muted">
+            Загрузка…
+          </div>
+        ) : items.length === 0 ? (
+          <div style={{ padding: 16 }} className="muted">
+            Логи пока отсутствуют.
+          </div>
+        ) : (
+          <table className="table">
             <thead>
-              <tr style={{ background: "rgba(15, 23, 42, 0.02)" }}>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Время
-                </th>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Отчёт
-                </th>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Пользователь
-                </th>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Статус
-                </th>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Ошибка
-                </th>
-                <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
-                  Schedule
-                </th>
+              <tr>
+                <th>ID</th>
+                <th>Дата и время</th>
+                <th>Отчёт</th>
+                <th>Пользователь</th>
+                <th>Статус</th>
+                <th>Ошибка</th>
               </tr>
             </thead>
             <tbody>
-              {filteredLogs.map((log) => (
-                <tr key={log.id}>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(15,23,42,0.06)", whiteSpace: "nowrap" }}>
-                    {formatDateTime(log.sentAt)}
-                  </td>
-
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(15,23,42,0.06)" }}>
-                    {log.reportName ?? (log.reportId ? `#${log.reportId}` : "—")}
-                  </td>
-
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(15,23,42,0.06)" }}>
-                    {log.username ?? (log.userId ? `#${log.userId}` : "—")}
-                  </td>
-
-                  <td
-                    style={{
-                      padding: 12,
-                      borderBottom: "1px solid rgba(15,23,42,0.06)",
-                      color: statusColor(log.status),
-                      fontWeight: 600,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {log.status}
-                  </td>
-
-                  <td
-                    style={{
-                      padding: 12,
-                      borderBottom: "1px solid rgba(15,23,42,0.06)",
-                      maxWidth: 380,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      color: "rgba(15, 23, 42, 0.75)",
-                    }}
-                    title={log.error ?? ""}
-                  >
-                    {log.error ?? "—"}
-                  </td>
-
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(15,23,42,0.06)", whiteSpace: "nowrap" }}>
-                    {log.scheduleId ? `#${log.scheduleId}` : "—"}
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>{formatDateTime(item.sentAt)}</td>
+                  <td>{item.reportName ?? "—"}</td>
+                  <td>{item.username ?? "—"}</td>
+                  <td>{renderStatus(item.status)}</td>
+                  <td style={{ maxWidth: 360, whiteSpace: "pre-wrap" }}>
+                    {item.error ?? "—"}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </Card>
     </div>
   );
 };

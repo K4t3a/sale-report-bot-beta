@@ -1,196 +1,219 @@
 import React, { useEffect, useMemo, useState } from "react";
+import axios from "axios";
+import type { ReactNode } from "react";
 import {
-  LineChart,
+  CartesianGrid,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
 } from "recharts";
+import Card from "./ui/Card";
+import { api } from "../lib/api";
 
-type Point = {
-  date: string; // YYYY-MM-DD
+type SalesPoint = {
+  date: string;
   totalRevenue: number;
   totalOrders: number;
   totalQuantity: number;
 };
 
-type ApiResponse = {
+type AnalyticsResponse = {
   from: string;
   to: string;
   days: number;
-  points: Point[];
+  points: SalesPoint[];
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+type ApiErrorResponse = {
+  message?: string;
+};
 
-interface Props {
-  days?: number;
-}
+type SalesRevenueChartProps = {
+  days: number;
+};
 
-/**
- * Безопасное преобразование значения к числу.
- * Recharts может прокидывать number | string | undefined.
- */
-function toNumber(value: number | string | undefined): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
+type ChartPoint = {
+  date: string;
+  shortDate: string;
+  revenue: number;
+};
+
+const formatAxisMoney = (value: number | string): string => {
+  const num = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(num)) {
+    return "0";
   }
-  return 0;
-}
 
-function formatMoney(value: number): string {
-  // Для короткого вида: 12 345
-  return value.toLocaleString("ru-RU");
-}
+  if (num >= 1_000_000) {
+    return `${Math.round(num / 1_000_000)}m`;
+  }
 
-function formatYAxisTick(val: number): string {
-  if (val >= 1_000_000) return `${Math.round(val / 1_000_000)}m`;
-  if (val >= 1_000) return `${Math.round(val / 1_000)}k`;
-  return String(val);
-}
+  if (num >= 1_000) {
+    return `${Math.round(num / 1_000)}k`;
+  }
 
-/**
- * Типы Tooltip в recharts не всегда корректны под strict TS.
- * Поэтому типизируем пропсы руками (ровно то, что нам нужно).
- */
-type CustomTooltipProps = {
-  active?: boolean;
-  label?: string | number;
-  payload?: Array<{
-    value?: number | string;
-    dataKey?: string;
-    name?: string;
-  }>;
+  return String(Math.round(num));
 };
 
-const CustomTooltip: React.FC<CustomTooltipProps> = ({
-  active,
-  label,
-  payload,
-}) => {
-  if (!active || !payload || payload.length === 0) return null;
-
-  const raw = payload[0]?.value;
-  const revenue = toNumber(raw);
-
-  return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid rgba(15, 23, 42, 0.10)",
-        borderRadius: 12,
-        padding: "10px 12px",
-        boxShadow: "0 12px 30px rgba(15, 23, 42, 0.10)",
-        fontSize: 12,
-        minWidth: 180,
-      }}
-    >
-      <div style={{ fontWeight: 900, marginBottom: 6 }}>
-        Дата: {String(label ?? "")}
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ color: "rgba(15, 23, 42, 0.70)" }}>Выручка, ₽</span>
-        <span style={{ fontWeight: 900 }}>{formatMoney(revenue)}</span>
-      </div>
-    </div>
-  );
+const formatTooltipMoney = (value: number): string => {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    maximumFractionDigits: 0,
+  }).format(value);
 };
 
-const SalesRevenueChart: React.FC<Props> = ({ days = 7 }) => {
-  const [data, setData] = useState<Point[]>([]);
-  const [loading, setLoading] = useState(false);
+const formatShortDate = (isoDate: string): string => {
+  const parsed = new Date(isoDate);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return isoDate;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+};
+
+const SalesRevenueChart: React.FC<SalesRevenueChartProps> = ({ days }) => {
+  const [data, setData] = useState<ChartPoint[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const xInterval = useMemo(() => {
-    if (data.length <= 10) return 0;
-    return Math.max(1, Math.round(data.length / 5));
-  }, [data.length]);
+  function getErrorMessage(err: unknown, fallback: string): string {
+    if (axios.isAxiosError<ApiErrorResponse>(err)) {
+      return err.response?.data?.message ?? err.message ?? fallback;
+    }
+
+    if (err instanceof Error) {
+      return err.message;
+    }
+
+    return fallback;
+  }
 
   useEffect(() => {
-    const fetchData = async () => {
+    let cancelled = false;
+
+    async function load(): Promise<void> {
+      setLoading(true);
+      setError(null);
+
       try {
-        setLoading(true);
-        setError(null);
+        const res = await api.get<AnalyticsResponse>("/api/analytics/sales-by-day", {
+          params: { days },
+        });
 
-        const resp = await fetch(
-          `${API_BASE}/api/analytics/sales-by-day?days=${days}`
-        );
-
-        if (!resp.ok) {
-          throw new Error(`Ошибка запроса: ${resp.status}`);
+        if (cancelled) {
+          return;
         }
 
-        const json = (await resp.json()) as ApiResponse;
+        const mapped: ChartPoint[] = res.data.points.map((point) => ({
+          date: point.date,
+          shortDate: formatShortDate(point.date),
+          revenue: point.totalRevenue,
+        }));
 
-        // Небольшая защита: убедимся, что points массив
-        const points = Array.isArray(json.points) ? json.points : [];
-        setData(points);
-      } catch (e: unknown) {
-        console.error("sales-by-day fetch error", e);
-        setError(e instanceof Error ? e.message : "Не удалось загрузить данные");
+        setData(mapped);
+      } catch (err: unknown) {
+        console.error("sales revenue chart error", err);
+
+        if (!cancelled) {
+          setError(getErrorMessage(err, "Ошибка загрузки графика"));
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-    };
+    }
 
-    void fetchData();
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [days]);
+
+  const title = useMemo(() => {
+    if (days === 1) {
+      return "Выручка по дням (последний 1 дн.)";
+    }
+
+    return `Выручка по дням (последние ${days} дн.)`;
   }, [days]);
 
   return (
-    <div className="card" style={{ padding: 16 }}>
-      <div
-        style={{
-          marginBottom: 8,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ fontWeight: 900, fontSize: 14 }}>
-          Выручка по дням (последние {days} дн.)
-        </div>
-      </div>
+    <Card>
+      <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 12 }}>{title}</div>
 
-      {loading && <div>Загрузка данных…</div>}
-      {error && (
-        <div style={{ color: "red", marginBottom: 8 }}>Ошибка: {error}</div>
-      )}
-
-      {!loading && !error && (
-        <div style={{ width: "100%", height: 280 }}>
-          <ResponsiveContainer>
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-
+      {loading ? (
+        <div className="muted">Загрузка...</div>
+      ) : error ? (
+        <div style={{ color: "red" }}>Ошибка: {error}</div>
+      ) : data.length === 0 ? (
+        <div className="muted">Нет данных для отображения</div>
+      ) : (
+        <div style={{ width: "100%", height: 420 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 10, right: 16, left: 8, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(15, 23, 42, 0.18)" />
               <XAxis
-                dataKey="date"
-                tick={{ fontSize: 10 }}
-                interval={xInterval}
+                dataKey="shortDate"
+                tick={{ fontSize: 11, fill: "rgba(15, 23, 42, 0.65)" }}
+                axisLine={{ stroke: "rgba(15, 23, 42, 0.35)" }}
+                tickLine={{ stroke: "rgba(15, 23, 42, 0.25)" }}
               />
+              <YAxis
+                tickFormatter={formatAxisMoney}
+                tick={{ fontSize: 12, fill: "rgba(15, 23, 42, 0.65)" }}
+                axisLine={{ stroke: "rgba(15, 23, 42, 0.35)" }}
+                tickLine={{ stroke: "rgba(15, 23, 42, 0.25)" }}
+                width={56}
+              />
+              <Tooltip
+                formatter={(value: number | string | Array<number | string> | undefined) => {
+                  const numericValue =
+                    typeof value === "number"
+                      ? value
+                      : typeof value === "string"
+                      ? Number(value)
+                      : Array.isArray(value)
+                      ? Number(value[0])
+                      : 0;
 
-              <YAxis tickFormatter={(v) => formatYAxisTick(v)} />
-
-              {/* Важно: используем кастомный tooltip с ручными типами */}
-              <Tooltip content={<CustomTooltip />} />
-
+                  return formatTooltipMoney(Number.isFinite(numericValue) ? numericValue : 0);
+                }}
+                labelFormatter={(label: ReactNode) => `Дата: ${String(label ?? "")}`}
+                contentStyle={{
+                  borderRadius: 12,
+                  border: "1px solid rgba(15, 23, 42, 0.08)",
+                  boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+                }}
+              />
               <Line
                 type="monotone"
-                dataKey="totalRevenue"
-                dot={{ r: 3 }}
-                strokeWidth={2}
-                // name влияет на подпись в tooltip/legend, но мы делаем кастомный tooltip
-                name="Выручка"
+                dataKey="revenue"
+                stroke="var(--primary)"
+                strokeWidth={2.5}
+                dot={{
+                  r: 3.5,
+                  strokeWidth: 2,
+                  fill: "#ffffff",
+                }}
+                activeDot={{
+                  r: 5,
+                  strokeWidth: 2,
+                  fill: "#ffffff",
+                }}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
       )}
-    </div>
+    </Card>
   );
 };
 

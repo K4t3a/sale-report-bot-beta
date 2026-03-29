@@ -1,7 +1,6 @@
 import { query } from "../../lib/db";
 
 // Ключи периодов для формирования отчёта.
-// last30days, чтобы корректно поддерживать отчёты с типом MONTH.
 export type ReportPeriodKey = "today" | "yesterday" | "last7days" | "last30days";
 
 export interface SalesReportSummary {
@@ -21,7 +20,6 @@ export interface SalesReportResult {
 /**
  * Возвращает начало дня (00:00:00.000) для указанной даты.
  */
-
 function startOfDay(date: Date): Date {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
@@ -31,7 +29,6 @@ function startOfDay(date: Date): Date {
 /**
  * Возвращает конец дня (23:59:59.999) для указанной даты.
  */
-
 function endOfDay(date: Date): Date {
   const d = new Date(date);
   d.setHours(23, 59, 59, 999);
@@ -41,7 +38,6 @@ function endOfDay(date: Date): Date {
 /**
  * Добавляет N дней к дате.
  */
-
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
@@ -49,7 +45,26 @@ function addDays(date: Date, days: number): Date {
 }
 
 /**
- * Преобразует ключ периода (today / yesterday / last7days) в диапазон дат [from..to].
+ * Экранирует значение для CSV.
+ * Если в тексте есть запятая, кавычка или перевод строки — оборачиваем в кавычки.
+ */
+function escapeCsvCell(value: string | number): string {
+  const stringValue = String(value);
+
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes('"') ||
+    stringValue.includes("\n") ||
+    stringValue.includes("\r")
+  ) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+}
+
+/**
+ * Преобразует ключ периода в диапазон дат [from..to].
  */
 export function getDateRangeForPeriod(
   period: ReportPeriodKey,
@@ -93,11 +108,9 @@ export function getDateRangeForPeriod(
 
 /**
  * Формирует отчёт по продажам за заданный период:
- * - читает записи из таблицы sale_demo
+ * - читает записи из sale_demo
  * - считает сводные показатели
  * - строит CSV с детализацией
- *
- * @param period ключ периода
  */
 export async function generateSalesReport(
   period: ReportPeriodKey
@@ -109,7 +122,7 @@ export async function generateSalesReport(
     customer: string;
     product: string;
     quantity: number;
-    price: string; // NUMERIC приходит строкой
+    price: string;
     saleDate: Date;
   }>(
     `
@@ -126,9 +139,9 @@ export async function generateSalesReport(
     [from, to]
   );
 
-  const sales = salesRes.rows.map((s) => ({
-    ...s,
-    price: Number(s.price),
+  const sales = salesRes.rows.map((sale) => ({
+    ...sale,
+    price: Number(sale.price),
   }));
 
   let totalRevenue = 0;
@@ -144,32 +157,37 @@ export async function generateSalesReport(
     sum: number;
   };
 
-  const rows: Row[] = sales.map((s) => {
-    const sum = s.price * s.quantity;
+  const rows: Row[] = sales.map((sale) => {
+    const sum = sale.price * sale.quantity;
     totalRevenue += sum;
-    totalQuantity += s.quantity;
-
-    const dateStr = s.saleDate.toISOString().slice(0, 10);
+    totalQuantity += sale.quantity;
 
     return {
-      date: dateStr,
-      customer: s.customer,
-      product: s.product,
-      quantity: s.quantity,
-      price: s.price,
-      sum,
+      date: sale.saleDate.toISOString().slice(0, 10),
+      customer: sale.customer,
+      product: sale.product,
+      quantity: sale.quantity,
+      price: Number(sale.price.toFixed(2)),
+      sum: Number(sum.toFixed(2)),
     };
   });
 
   const averageCheck =
     totalOrders > 0 ? Number((totalRevenue / totalOrders).toFixed(2)) : 0;
 
-  const header = "date;customer;product;quantity;price;sum";
-  const lines = rows.map(
-    (r) =>
-      `${r.date};${r.customer};${r.product};${r.quantity};${r.price
-        .toFixed(2)
-        .replace(".", ",")};${r.sum.toFixed(2).replace(".", ",")}`
+  const header = ["date", "customer", "product", "quantity", "price", "sum"]
+    .map(escapeCsvCell)
+    .join(",");
+
+  const lines = rows.map((row) =>
+    [
+      escapeCsvCell(row.date),
+      escapeCsvCell(row.customer),
+      escapeCsvCell(row.product),
+      escapeCsvCell(row.quantity),
+      escapeCsvCell(row.price.toFixed(2)),
+      escapeCsvCell(row.sum.toFixed(2)),
+    ].join(",")
   );
 
   const csvTable = [header, ...lines].join("\n");
@@ -189,23 +207,23 @@ export async function generateSalesReport(
 
 /**
  * Объединяет краткую сводку и детализацию CSV в один файл.
+ * Сначала мини-блок summary, потом пустая строка, потом таблица.
  */
 export function buildCsvWithSummary(
   reportName: string,
   summary: SalesReportSummary,
   detailCsv: string
 ): string {
-  // Блок summary нужен для удобства чтения отчёта в Excel/Google Sheets.
   const summaryLines = [
-    `Отчёт;${reportName}`,
-    `Выручка;${summary.totalRevenue.toFixed(2)}`,
-    `Количество заказов;${summary.totalOrders}`,
-    `Количество единиц;${summary.totalQuantity}`,
-    `Средний чек;${summary.averageCheck.toFixed(2)}`,
-    "",
-  ];
+    ["report_name", reportName],
+    ["total_revenue", summary.totalRevenue.toFixed(2)],
+    ["total_orders", String(summary.totalOrders)],
+    ["total_quantity", String(summary.totalQuantity)],
+    ["average_check", summary.averageCheck.toFixed(2)],
+    [],
+  ].map((row) => row.map(escapeCsvCell).join(","));
 
-  return summaryLines.join("\n") + "\n" + detailCsv;
+  return `${summaryLines.join("\n")}\n${detailCsv}`;
 }
 
 export type SaleRow = {
@@ -214,20 +232,13 @@ export type SaleRow = {
 };
 
 export function buildSummaryFromRows(rows: SaleRow[]) {
-  const totalRevenue = rows.reduce(
-    (sum, row) => sum + row.price * row.quantity,
-    0
-  );
+  const totalRevenue = rows.reduce((sum, row) => sum + row.price * row.quantity, 0);
 
   const totalOrders = rows.length;
 
-  const totalQuantity = rows.reduce(
-    (sum, row) => sum + row.quantity,
-    0
-  );
+  const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
 
-  const averageCheck =
-    totalOrders > 0 ? totalRevenue / totalOrders : 0;
+  const averageCheck = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
   return {
     totalRevenue,

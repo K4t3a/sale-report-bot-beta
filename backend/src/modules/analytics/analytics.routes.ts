@@ -1,8 +1,12 @@
 import { Router } from "express";
 import { query } from "../../lib/db";
+import { requireAuth, requireRoles } from "../../middleware/auth";
 
 const router = Router();
 
+// Вся аналитика относится к панели.
+// Доступ только ADMIN и ANALYST.
+router.use(requireAuth, requireRoles("ADMIN", "ANALYST"));
 
 function startOfDay(date: Date): Date {
   const d = new Date(date);
@@ -24,12 +28,7 @@ function addDays(date: Date, days: number): Date {
 
 /**
  * GET /api/analytics/sales-by-day?days=7
- *
- * Возвращает серию по дням:
- * [
- *   { date: "2025-12-01", totalRevenue: 32000, totalOrders: 3, totalQuantity: 7 },
- *   ...
- * ]
+ * Возвращает серию по дням для графика.
  */
 router.get("/sales-by-day", async (req, res) => {
   try {
@@ -43,7 +42,6 @@ router.get("/sales-by-day", async (req, res) => {
     const from = startOfDay(addDays(now, -(days - 1)));
     const to = endOfDay(now);
 
-    // Аггрегация SQL-ем: это быстрее и проще для больших объёмов данных.
     const aggRes = await query<{
       day: string;
       totalRevenue: string;
@@ -64,11 +62,14 @@ router.get("/sales-by-day", async (req, res) => {
       [from, to]
     );
 
-    const byDate = new Map<string, {
-      totalRevenue: number;
-      totalOrders: number;
-      totalQuantity: number;
-    }>();
+    const byDate = new Map<
+      string,
+      {
+        totalRevenue: number;
+        totalOrders: number;
+        totalQuantity: number;
+      }
+    >();
 
     for (const r of aggRes.rows) {
       byDate.set(r.day, {
@@ -78,7 +79,6 @@ router.get("/sales-by-day", async (req, res) => {
       });
     }
 
-    
     const points: {
       date: string;
       totalRevenue: number;
@@ -99,7 +99,7 @@ router.get("/sales-by-day", async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       from: from.toISOString(),
       to: to.toISOString(),
       days,
@@ -107,7 +107,10 @@ router.get("/sales-by-day", async (req, res) => {
     });
   } catch (err) {
     console.error("GET /api/analytics/sales-by-day error", err);
-    res.status(500).json({ message: "Ошибка аналитики продаж" });
+
+    return res.status(500).json({
+      message: "Ошибка аналитики продаж",
+    });
   }
 });
 

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT,
-  role          TEXT NOT NULL DEFAULT 'VIEWER' CHECK (role IN ('ADMIN', 'VIEWER')),
+  role          TEXT NOT NULL DEFAULT 'VIEWER' CHECK (role IN ('ADMIN', 'ANALYST', 'VIEWER')),
   telegram_id   TEXT UNIQUE,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),

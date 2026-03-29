@@ -9,7 +9,6 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
 
   const [username, setUsername] = useState("admin");
-  // По умолчанию: admin/admin (в .env seed)
   const [password, setPassword] = useState("admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,14 +30,30 @@ const Login: React.FC = () => {
       });
 
       const data = await resp.json().catch(() => null);
+
       if (!resp.ok) {
-        throw new Error(data?.message ?? "Ошибка авторизации");
+        throw new Error(
+          typeof data === "object" && data !== null && "message" in data
+            ? String((data as { message?: string }).message ?? "Ошибка авторизации")
+            : "Ошибка авторизации"
+        );
       }
 
-      localStorage.setItem("authToken", data.token);
-      localStorage.setItem("authUser", JSON.stringify(data.user));
+      const token =
+        typeof data === "object" && data !== null && "token" in data
+          ? String((data as { token: string }).token)
+          : "";
+
+      const user =
+        typeof data === "object" && data !== null && "user" in data
+          ? (data as { user: unknown }).user
+          : null;
+
+      localStorage.setItem("authToken", token);
+      localStorage.setItem("authUser", JSON.stringify(user));
+
       navigate("/admin", { replace: true });
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("login error", e);
       setError(e instanceof Error ? e.message : "Неизвестная ошибка");
     } finally {
@@ -66,12 +81,21 @@ const Login: React.FC = () => {
       >
         <Card style={{ padding: 22 }}>
           <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ fontSize: 12, letterSpacing: "0.08em", fontWeight: 800, color: "var(--primary)" }}>
+            <div
+              style={{
+                fontSize: 12,
+                letterSpacing: "0.08em",
+                fontWeight: 800,
+                color: "var(--primary)",
+              }}
+            >
               SALES REPORT BOT
             </div>
+
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>
               Вход в админ-панель
             </h1>
+
             <p className="muted" style={{ margin: 0 }}>
               Для демонстрации используем локального администратора.
               После входа доступны отчёты, расписания и логи доставки.
@@ -81,6 +105,7 @@ const Login: React.FC = () => {
               <Link className="btn btn-ghost" to="/">
                 На лендинг
               </Link>
+
               <a
                 className="btn btn-ghost"
                 href="https://t.me/sales_r3port_bot"

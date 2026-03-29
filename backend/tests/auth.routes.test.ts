@@ -2,7 +2,7 @@
 
 import request from "supertest";
 
-// Мокаем db.query до импорта app (иначе реальные импорты подтянут db.ts).
+// Мокаем db.query до импорта app
 jest.mock("../src/lib/db", () => ({
   query: jest.fn(),
 }));
@@ -40,12 +40,32 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(401);
   });
 
-  test("401: если пользователь не ADMIN или не active", async () => {
+  test("401: если пользователь не active", async () => {
     queryMock.mockResolvedValueOnce({
       rows: [
         {
           id: 1,
           username: "u",
+          role: "ADMIN",
+          isActive: false,
+          passwordHash: "hash",
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ username: "u", password: "x" });
+
+    expect(res.status).toBe(401);
+  });
+
+  test("401: если пользователь VIEWER и пытается войти в web-панель", async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 1,
+          username: "viewer",
           role: "VIEWER",
           isActive: true,
           passwordHash: "hash",
@@ -55,7 +75,7 @@ describe("POST /api/auth/login", () => {
 
     const res = await request(app)
       .post("/api/auth/login")
-      .send({ username: "u", password: "x" });
+      .send({ username: "viewer", password: "x" });
 
     expect(res.status).toBe(401);
   });
@@ -72,6 +92,7 @@ describe("POST /api/auth/login", () => {
         },
       ],
     });
+
     bcryptCompareMock.mockResolvedValueOnce(false);
 
     const res = await request(app)
@@ -81,7 +102,7 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(401);
   });
 
-  test("200: возвращает token при успешном входе", async () => {
+  test("200: ADMIN получает token при успешном входе", async () => {
     queryMock.mockResolvedValueOnce({
       rows: [
         {
@@ -93,6 +114,7 @@ describe("POST /api/auth/login", () => {
         },
       ],
     });
+
     bcryptCompareMock.mockResolvedValueOnce(true);
 
     const res = await request(app)
@@ -105,6 +127,34 @@ describe("POST /api/auth/login", () => {
       id: 1,
       username: "admin",
       role: "ADMIN",
+    });
+  });
+
+  test("200: ANALYST тоже может войти в web-панель", async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 2,
+          username: "analyst",
+          role: "ANALYST",
+          isActive: true,
+          passwordHash: "hash",
+        },
+      ],
+    });
+
+    bcryptCompareMock.mockResolvedValueOnce(true);
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ username: "analyst", password: "analyst" });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.token).toBe("string");
+    expect(res.body.user).toMatchObject({
+      id: 2,
+      username: "analyst",
+      role: "ANALYST",
     });
   });
 });
