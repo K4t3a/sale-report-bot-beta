@@ -1,232 +1,215 @@
-# Sales Report Bot (Beta) — конструктор Telegram-бота для регулярной отчётности продаж
+# 📊 Sales Report Bot — конструктор Telegram-бота для автоматической отчётности
 
-Бета-версия учебного проекта: **web-приложение + backend API + Telegram-бот**, которое автоматизирует:
-- формирование отчётов по продажам (сводка + CSV),
-- настройку расписаний рассылки,
-- доставку отчётов пользователям в Telegram.
+Полноценная система, состоящая из **Backend API + Admin Web + Telegram-бота**, предназначенная для автоматизации формирования и доставки отчётов по продажам.
 
----
-
-## ✨ Что реализовано в beta
-
-### Основные сценарии
-- **Админ-панель (Web)**:
-  - вход администратора (JWT выдаётся на логине),
-  - просмотр отчётов,
-  - настройка расписаний (DAILY/WEEKLY, время, получатели),
-  - просмотр логов доставок,
-  - график выручки (аналитика по дням).
-
-- **Backend API (Node.js/Express + PostgreSQL)**:
-  - генерация отчётов за периоды (today / last7days / last30days),
-  - экспорт в CSV (в т.ч. “шапка” со сводными метриками),
-  - планировщик “кто должен уйти сейчас” (`/api/schedules/run-due`),
-  - логирование доставок (для анти-дублей),
-  - healthcheck.
-
-- **Telegram-бот (Telegraf)**:
-  - привязка пользователя по “коду” (в beta код = `username` пользователя в БД),
-  - команда `/today` — отчёт за сегодня (сообщение + файл `.csv.gz`),
-  - команда `/reports` — список отчётов с inline-кнопками,
-  - polling расписаний каждые 10 секунд и рассылка отчётов.
+Проект разработан в рамках дипломной работы.
 
 ---
 
-##  Стек
+# 🚀 Возможности
 
-- **Backend:** Node.js + TypeScript, Express, pg, bcrypt, jsonwebtoken
-- **DB:** PostgreSQL
-- **Frontend:** React (Vite) + React Router + Recharts
-- **Bot:** Telegraf + axios
-- **Тесты:** Jest (базовые unit-тесты)
+## 🔹 Backend (Node.js + Express + PostgreSQL)
+
+* Генерация отчётов по периодам:
+
+  * today
+  * last7days
+  * last30days
+* Формирование CSV (с BOM + корректная кодировка)
+* Планировщик отправки отчётов (schedules)
+* Исключение дублей отправки
+* Логирование доставок (`SUCCESS / ERROR`)
+* REST API для фронтенда и бота
 
 ---
 
-## 📁 Структура проекта
+## 🔹 Telegram-бот (Telegraf)
+
+* Привязка аккаунта через одноразовый код
+* Команды:
+
+  * `/today` — отчёт за сегодня
+  * `/week` — отчёт за 7 дней
+  * `/month` — отчёт за 30 дней
+  * `/reports` — список отчётов
+* Отправка:
+
+  * текст + CSV.gz файл
+* Автоматическая рассылка по расписанию
+* Polling каждые 10 секунд
+* Обработка ошибок доставки
+
+---
+
+## 🔹 Frontend (React)
+
+* Авторизация администратора (JWT)
+* Управление отчётами
+* Настройка расписаний
+* Просмотр логов отправок
+* График аналитики продаж
+
+---
+
+# 🧱 Архитектура
+
+```
+Frontend (React)
+        ↓
+Backend API (Express)
+        ↓
+PostgreSQL
+        ↓
+Telegram Bot (Telegraf)
+```
+
+---
+
+# 🛠️ Технологии
+
+* **Backend:** Node.js, TypeScript, Express, pg
+* **Frontend:** React, Vite, Recharts
+* **Bot:** Telegraf, axios
+* **Database:** PostgreSQL
+* **Auth:** JWT
+* **Testing:** Jest
+
+---
+
+# 📁 Структура проекта
 
 ```
 sales-report-bot-beta/
-  backend/     # REST API + миграции + seed
-  frontend/    # админ-панель (React)
-  bot/         # Telegram-бот (Telegraf)
-  docker-compose.yml  # PostgreSQL 
+  backend/
+  frontend/
+  bot/
+  docker-compose.yml
 ```
 
 ---
 
-## Быстрый старт 
+# ⚙️ Установка и запуск
 
-### 0) Требования
-- Node.js **18+** (лучше 20/22)
-- Docker Desktop (если используешь docker-compose)
-- npm
-
----
-
-### 1) Поднять PostgreSQL
-В корне проекта:
+## 1. PostgreSQL (Docker)
 
 ```bash
 docker compose up -d
 ```
 
-Параметры БД из `docker-compose.yml`:
-- DB: `sales`
-- user: `sales_user`
-- pass: `sales_pass`
-- port: `5432`
-
 ---
 
-### 2) Backend — миграции + сид + запуск
+## 2. Backend
+
 ```bash
 cd backend
-npm i
+npm install
 ```
 
-#### Настрой `.env` (backend/.env)
-Для docker-compose удобно так:
+### .env
+
 ```env
 PORT=4000
 JWT_SECRET=dev-secret
 DATABASE_URL=postgresql://sales_user:sales_pass@127.0.0.1:5432/sales
-
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin
-
-SEED_COUNT=50000
-SEED_DAYS=30
 ```
 
-#### Применить миграции и заполнить данными
+### Миграции и сид
+
 ```bash
 npm run migrate
 npm run seed
 ```
 
-#### Запуск backend
+### Запуск
+
 ```bash
 npm run dev
 ```
 
-Проверка:
-- `GET http://localhost:4000/api/health`
-
-> Если открыть просто `http://localhost:4000/` — это нормально, что вернётся `Маршрут не найден` (в проекте нет “главной страницы” на backend).
-
 ---
 
-### 3) Frontend — запуск админ-панели
-```bash
-cd ../frontend
-npm i
-```
+## 3. Frontend
 
-Создай `frontend/.env` (или используй дефолт):
-```env
-VITE_API_BASE_URL=http://localhost:4000
-```
-
-Запуск:
 ```bash
+cd frontend
+npm install
 npm run dev
 ```
 
-Открой:
-- `http://localhost:5173` (или адрес, который покажет Vite)
-
-Логин по умолчанию:
-- **admin / admin** (создаётся сидом)
-
 ---
 
-### 4) Bot — запуск Telegram-бота
+## 4. Telegram Bot
+
 ```bash
-cd ../bot
-npm i
+cd bot
+npm install
 ```
 
-Создай `bot/.env`:
+### .env
+
 ```env
-BOT_TOKEN=PASTE_YOUR_TOKEN_HERE
+BOT_TOKEN=your_token
 BACKEND_BASE_URL=http://localhost:4000
 ```
 
-Запуск:
+### Запуск
+
 ```bash
 npm run dev
 ```
 
 ---
 
+# ⏱️ Как работает расписание
 
-## 🗄️ Как засидить 100 000 записей продаж
+1. Админ создаёт расписание
+2. Бот каждые 10 секунд вызывает:
 
-Сид по умолчанию **очищает** таблицу `sale_demo` и заполняет заново.
+   ```
+   GET /api/schedules/due
+   ```
+3. Backend возвращает задачи
+4. Бот отправляет отчёт
+5. Backend фиксирует результат:
 
-1) В `backend/.env`:
-```env
-SEED_COUNT=100000
-```
-
-2) Запусти:
-```bash
-cd backend
-npm run seed
-```
-
----
-
-## ⏱️ Расписания и рассылка
-
-- Админ создаёт расписание в админ-панели, выбирая получателей из списка **уже привязанных** Telegram-пользователей.
-- Бот каждые 10 секунд делает POST:
-  - `POST /api/schedules/run-due`
-- Backend:
-  - ищет расписания на текущую минуту,
-  - не отправляет повторно, если в эту минуту уже есть `SUCCESS` в `delivery_logs`.
+   * SUCCESS
+   * ERROR
 
 ---
 
-## 🔌 Основные API 
+# 📡 Основные API
 
-- `GET /api/health` — проверка API + DB
-- `POST /api/auth/login` — логин администратора (JWT)
-- `GET /api/reports` — список отчётов
-- `POST /api/reports/daily-sales` — отчёт за период (today/last7days/last30days)
-- `POST /api/reports/:id/run` — запустить отчёт по id
-- `GET /api/analytics/sales-by-day?days=7` — выручка/заказы/кол-во по дням
-- `GET /api/schedules` — список расписаний
-- `POST /api/schedules` — создать расписание
-- `DELETE /api/schedules/:id` — удалить расписание
-- `POST /api/schedules/run-due` — “что отправить сейчас” (использует бот)
-- `POST /api/users/telegram-bind` — привязать Telegram по коду (username)
-- `GET /api/users/telegram` — список активных пользователей с telegram_id
-- `GET /api/logs?limit=50` — логи доставок
+* `GET /api/health`
+* `POST /api/auth/login`
+* `GET /api/reports`
+* `POST /api/reports/:id/run`
+* `GET /api/schedules`
+* `POST /api/schedules`
+* `GET /api/schedules/due`
+* `POST /api/schedules/delivery-result`
+* `GET /api/logs`
 
 ---
 
-## ✅ Тесты (backend)
+# 🧪 Тестирование
 
 ```bash
 cd backend
 npm test
 ```
 
-### Быстрый способ (Linux/macOS)
-```bash
-DATABASE_URL="postgresql://sales_user:sales_pass@127.0.0.1:5432/sales" npm test
-```
+---
 
-### PowerShell (Windows)
-```powershell
-$env:DATABASE_URL="postgresql://sales_user:sales_pass@127.0.0.1:5432/sales"; npm test
-```
+# 🔮 Roadmap
 
+* Retry отправок
+* Очереди сообщений
+* PDF/XLSX экспорт
+* Улучшенная безопасность
+* Интеграции (CRM, 1С)
 
-##  Roadmap 
-- Серверная авторизация (JWT middleware + роли)
-- Реальный “код привязки” (одноразовый токен/инвайт, а не username)
-- Экспорт PDF/XLSX
-- Нагрузочные тесты и метрики времени формирования/доставки
-- Интеграции с реальными источниками данных (CRM/1С/Google Sheets)
+---
+
+# 👨‍💻 Автор
+
+Дипломный проект: автоматизация отчётности отдела продаж с интеграцией Telegram.
